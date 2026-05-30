@@ -1,0 +1,101 @@
+			+-------------------------+
+			|      CompSci 143A       |
+			| PROJECT 0: Getting Real |
+			|     DESIGN DOCUMENT     |
+			+-------------------------+
+				   
+---- AUTHOR ----
+
+>> Fill in your name and email address.
+
+Leonardo Cebrero cebrerol@uci.edu
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, or notes for the
+>> TAs, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     Booting Pintos
+			     ==============
+
+---- QUESTIONS ---- 
+>> Put the screenshots of Pintos running in src/p0.
+>> A1: Is there any particular issue that you would like us to know?
+
+No.
+
+
+			     Kernel Monitor
+			     ==============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+monitor.c:
+char input[50]: used it as a buffer for string creation using char input
+
+read_line.c:
+int char: used to hold the char value returned from input_getc
+int i: used for indexing buffer array while building string
+
+
+
+---- ALGORITHMS ----
+>> C2: Explain how you read and write to the console for the kernel monitor.
+
+read_line.c:
+
+In my read_line function, I declare int c to hold the input char received from the key pressed.
+I also initialize int i to zero as starting point for my buffer indexing.
+
+A loop is then used to allow the buffering of user keystrokes up to the buffer size - 1.
+We must save the last entry of the buffer for '\0' to null-terminate the string.
+
+In each iteration of the loop, the input_getc() function is used to receive an input char.
+This input char is placed in c.
+
+C is then compared to newline or line break which signal that the user is done with this current input sequence.
+A newline is printed to terminal to echo the input.
+The loop then breaks.
+
+If not a newline, the char is then compared to the backspace character.
+If pressed, i is first decremented to edit the previous char in buffer.
+Backspace, space, backspace is then printed to delete the previous char in terminal.
+The keyword continue is then used to skip the rest of the current iteration as current c will not be added to the buffer.
+
+If neither of those cases are true, the element at buffer[i] is set to the current input char.
+Int c is also output to terminal in char format to echo the input back to the user.
+
+Once the loop is done, the current string is done building so '\0' is added to the end of buffer to null-terminate string.
+The function then returns the number of total input chars.
+
+monitor.c:
+
+The buffer is initialized as an empty char array input which holds 50 chars.
+
+A loop is then implemented that runs until it breaks.
+
+For each iteration of the loop, I first print the intial input prompt, "ICS143A> ".
+Then, I call the read_line with our buffer and buffer size as parameters.
+
+I first check if the input is equal to command "exit" using strcmp.
+If so, the user is told that the monitor is now exiting and the loop breaks.
+
+I then check if the input is equal to command "whoami" using strcmp.
+If it is, I print out my name and a newline.
+
+If neither of these cases are true, "invalid command" and a newline are printed.
+
+If we reach the end of the loop without breaking, the whole process restarts.
+The user is prompted for input once again until eventually they type exit.
+
+>> C3: Any additional enhancement you implement?
+
+I did implement my own header and source files for monitor.c and read_line.c.

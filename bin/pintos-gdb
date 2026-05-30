@@ -1,0 +1,17 @@
+#! /bin/sh
+
+# Path to GDB macros file.  Customize for your site.
+GDBMACROS=$(dirname $0)/../misc/gdb-macros
+
+# Choose correct GDB.
+GDB=gdb
+
+# Run GDB.
+if test -f "$GDBMACROS"; then
+	exec $GDB -x "$GDBMACROS" "$@"
+else
+	echo "*** $GDBMACROS does not exist ***"
+	echo "*** Pintos GDB macros will not be available ***"
+	exec $GDB "$@"
+fi
+

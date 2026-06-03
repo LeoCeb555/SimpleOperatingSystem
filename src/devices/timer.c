@@ -30,6 +30,9 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+/* List of asleep processes, that is, processes that are waiting to be awoken */
+static struct list asleep_list;
+
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
@@ -37,6 +40,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&asleep_list); // initialize empty list
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -84,8 +88,8 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
-/* Sleeps for approximately TICKS timer ticks.  Interrupts must
-   be turned on. */
+/* BUSY WAITING: Sleeps for approximately TICKS timer ticks.  Interrupts must
+   be turned on.
 void
 timer_sleep (int64_t ticks) 
 {
@@ -94,6 +98,24 @@ timer_sleep (int64_t ticks)
   ASSERT (intr_get_level () == INTR_ON);
   while (timer_elapsed (start) < ticks) 
     thread_yield ();
+}*/
+
+/* NON-BUSY WAITING: Sleeps for approximately TICKS timer ticks.  Interrupts must
+   be turned off. */
+void
+timer_sleep (int64_t ticks) 
+{
+  struct thread *cur = thread_current();
+  
+  ASSERT (intr_get_level () == INTR_ON); // ensure interrupts are enabled
+
+  enum intr_level old_level = intr_disable(); // enter critical section
+
+  cur->wake_tick = timer_ticks() + ticks; // update wake threshold
+  list_push_back(&asleep_list, &thread_current()->elem); // add thread to blocked list
+  thread_block(); // puts thread to sleep
+
+  intr_set_level(old_level); // restores interrupt state
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +194,24 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  if(!list_empty(&asleep_list)){ // check for blocked threads
+    
+    struct list_elem* finger = list_begin(&asleep_list); // first elem in list
+
+    while(finger != list_tail(&asleep_list)){
+      struct thread* t = list_entry(finger, struct thread, elem); // grab thread
+      struct list_elem* next = list_next(finger);
+
+      if(t->wake_tick <= ticks){ // thread can wake up
+
+        next = list_remove(finger); // remove thread from blocked list
+        thread_unblock(t); // add thread to ready list
+      }
+
+      finger = next;
+    }
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

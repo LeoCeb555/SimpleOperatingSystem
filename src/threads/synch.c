@@ -132,7 +132,7 @@ sema_up (struct semaphore *sema)
   sema->value++;
   intr_set_level (old_level);
 
-  if (yield){ // resechule
+  if (yield){ // reschedule
     thread_yield();
   }
 }
@@ -213,24 +213,25 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  struct thread* owner = lock->holder;
-  int owner_priority;
+  if(!thread_mlfqs){ // run priority donation
 
-  if(owner != NULL){ // current thread must wait
-    thread_current()->waiting_for = lock;
-    owner_priority = owner->priority;
-  }
+    struct thread* owner = lock->holder;
 
-  while(owner != NULL){ // waiting on threads
-
-    if(owner_priority < thread_get_priority()){ // donate priority to owner thread
-      owner->priority = thread_get_priority();
-    }
-    if(owner->waiting_for == NULL){ // not waiting on lock
-      break;
+    if(owner != NULL){ // current thread must wait
+      thread_current()->waiting_for = lock;
     }
 
-    owner = owner->waiting_for->holder; // grab thread owner is waiting on
+    while(owner != NULL){ // waiting on threads
+
+      if(owner->priority < thread_get_priority()){ // donate priority to owner thread
+        owner->priority = thread_get_priority();
+      }
+      if(owner->waiting_for == NULL){ // not waiting on lock
+        break;
+      }
+
+      owner = owner->waiting_for->holder; // grab thread owner is waiting on
+    }
   }
 
   sema_down (&lock->semaphore);
@@ -274,34 +275,36 @@ lock_release (struct lock *lock)
   struct thread* owner = lock->holder;
   struct list* locks = &owner->locks;
 
-  if(list_empty(locks)){ // can restore undonated priority
-    if(owner->priority != owner->original_priority){
-      owner->priority = owner->original_priority;
-    }
-  }
-  else{ // donate next highest priority
-    int max = owner->original_priority;
-    struct list_elem* finger1 = list_begin(locks);
-
-    while(finger1 != list_tail(locks)){ // scan locks
-       // grab cur lock
-      struct lock* cur_lock = list_entry(finger1, struct lock, elem);
-      // grab waiting threads
-      struct list* waiters = &cur_lock->semaphore.waiters;
-
-      struct list_elem* finger2 = list_begin(waiters);
-      while(finger2 != list_tail(waiters)){
-         // grab cur thread
-        struct thread* t = list_entry(finger2, struct thread, elem);
-
-        if(t->priority > max){ // update donated priority
-          max = t->priority;
-        }
-        finger2 = list_next(finger2);
+  if(!thread_mlfqs){
+    if(list_empty(locks)){ // can restore undonated priority
+      if(owner->priority != owner->original_priority){
+        owner->priority = owner->original_priority;
       }
-      finger1 = list_next(finger1);
     }
-    owner->priority = max;
+    else{ // donate next highest priority
+      int max = owner->original_priority;
+      struct list_elem* finger1 = list_begin(locks);
+
+      while(finger1 != list_tail(locks)){ // scan locks
+        // grab cur lock
+        struct lock* cur_lock = list_entry(finger1, struct lock, elem);
+        // grab waiting threads
+        struct list* waiters = &cur_lock->semaphore.waiters;
+
+        struct list_elem* finger2 = list_begin(waiters);
+        while(finger2 != list_tail(waiters)){
+          // grab cur thread
+          struct thread* t = list_entry(finger2, struct thread, elem);
+
+          if(t->priority > max){ // update donated priority
+            max = t->priority;
+          }
+          finger2 = list_next(finger2);
+        }
+        finger1 = list_next(finger1);
+      }
+      owner->priority = max;
+    }
   }
 
   lock->holder = NULL;

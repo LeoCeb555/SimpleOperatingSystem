@@ -357,25 +357,30 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  struct thread* cur = thread_current();
+  if(!thread_mlfqs){
+    struct thread* cur = thread_current();
 
-  bool not_donated = (cur->priority == cur->original_priority);
+    bool not_donated = (cur->priority == cur->original_priority);
 
-  cur->original_priority = new_priority;
+    cur->original_priority = new_priority;
 
-  if (not_donated){ // can be changed
-    cur->priority = new_priority;
-  }
-
-  if(!list_empty(&ready_list)){ // might have to switch thread
-
-    struct list_elem* front = list_front(&ready_list); // grab elem with highest priority
-
-    struct thread* t = list_entry(front, struct thread, elem); // get elem thread info
-
-    if(cur->priority < t->priority){ // prioritize thread with higher priority
-      thread_yield();
+    if (not_donated){ // can be changed
+      cur->priority = new_priority;
     }
+
+    if(!list_empty(&ready_list)){ // might have to switch thread
+
+      struct list_elem* front = list_front(&ready_list); // grab elem with highest priority
+
+      struct thread* t = list_entry(front, struct thread, elem); // get elem thread info
+
+      if(cur->priority < t->priority){ // prioritize thread with higher priority
+        thread_yield();
+      }
+    }
+  }
+  else{ // cannot change priority
+    return;
   }
 }
 
@@ -502,8 +507,14 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  t->priority = priority;
-  t->original_priority = priority; // permanently store undonated priority
+  if(!thread_mlfqs){
+    t->priority = priority;
+    t->original_priority = priority; // permanently store undonated priority
+  }
+  else{ // can ignore priority parameter
+    t->priority = 0;
+    t->original_priority = 0;
+  }
   t->waiting_for = NULL; // initialize default lock
   t->magic = THREAD_MAGIC;
 
@@ -513,6 +524,7 @@ init_thread (struct thread *t, const char *name, int priority)
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
 }
+
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */

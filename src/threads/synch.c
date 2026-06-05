@@ -66,11 +66,14 @@ sema_down (struct semaphore *sema)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  while (sema->value == 0) 
-    {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+  while (sema->value == 0){ 
+      // insert in order of priority
+      list_insert_ordered(&sema->waiters,
+                          &thread_current()->elem,
+                          list_less_priority,
+                          NULL);
       thread_block ();
-    }
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -112,12 +115,26 @@ sema_up (struct semaphore *sema)
 
   ASSERT (sema != NULL);
 
+  bool yield = false; // flag raised if rescheduling is needed
+
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
+  if (!list_empty (&sema->waiters)) {
+    struct list_elem* front = list_front(&sema->waiters);
+    struct thread* t = list_entry(front, struct thread, elem);
+
     thread_unblock (list_entry (list_pop_front (&sema->waiters),
                                 struct thread, elem));
+
+    if (t->priority > thread_current()->priority){ // raise flag
+      yield = true;
+    }
+  }
   sema->value++;
   intr_set_level (old_level);
+
+  if (yield){ // resechule
+    thread_yield();
+  }
 }
 
 static void sema_test_helper (void *sema_);
@@ -196,8 +213,30 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  struct thread* owner = lock->holder;
+  int owner_priority;
+
+  if(owner != NULL){ // current thread must wait
+    thread_current()->waiting_for = lock;
+    owner_priority = owner->priority;
+  }
+
+  while(owner != NULL){ // waiting on threads
+
+    if(owner_priority < thread_get_priority()){ // donate priority to owner thread
+      owner->priority = thread_get_priority();
+    }
+    if(owner->waiting_for == NULL){ // not waiting on lock
+      break;
+    }
+
+    owner = owner->waiting_for->holder; // grab thread owner is waiting on
+  }
+
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
+  thread_current()->waiting_for = NULL; // no longer waiting for lock
+  list_push_back(&thread_current()->locks, &lock->elem); // update locks of holder
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -230,6 +269,40 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
+
+  list_remove(&lock->elem); // lock no longer held by thread
+  struct thread* owner = lock->holder;
+  struct list* locks = &owner->locks;
+
+  if(list_empty(locks)){ // can restore undonated priority
+    if(owner->priority != owner->original_priority){
+      owner->priority = owner->original_priority;
+    }
+  }
+  else{ // donate next highest priority
+    int max = owner->original_priority;
+    struct list_elem* finger1 = list_begin(locks);
+
+    while(finger1 != list_tail(locks)){ // scan locks
+       // grab cur lock
+      struct lock* cur_lock = list_entry(finger1, struct lock, elem);
+      // grab waiting threads
+      struct list* waiters = &cur_lock->semaphore.waiters;
+
+      struct list_elem* finger2 = list_begin(waiters);
+      while(finger2 != list_tail(waiters)){
+         // grab cur thread
+        struct thread* t = list_entry(finger2, struct thread, elem);
+
+        if(t->priority > max){ // update donated priority
+          max = t->priority;
+        }
+        finger2 = list_next(finger2);
+      }
+      finger1 = list_next(finger1);
+    }
+    owner->priority = max;
+  }
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);

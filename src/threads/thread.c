@@ -358,7 +358,10 @@ void
 thread_set_priority (int new_priority) 
 {
   struct thread* cur = thread_current();
-  cur->priority = new_priority;
+
+  if (cur->priority == cur->original_priority){ // can be changed
+    cur->priority = new_priority;
+  }
 
   if(!list_empty(&ready_list)){ // might have to switch thread
 
@@ -496,7 +499,11 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority; // permanently store undonated priority
+  t->waiting_for = NULL; // initialize default lock
   t->magic = THREAD_MAGIC;
+
+  list_init (&t->locks); // initialize default list
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

@@ -135,7 +135,6 @@ pintos_init (void)
   } else {
     // TODO: no command line passed to kernel. Run interactively
 	viewMonitor();
-	printf("Monitor successfully exit");	
   }
 
   /* Finish up. */

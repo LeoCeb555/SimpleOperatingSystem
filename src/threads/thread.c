@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -49,6 +50,8 @@ struct kernel_thread_frame
 static long long idle_ticks;    /* # of timer ticks spent idle. */
 static long long kernel_ticks;  /* # of timer ticks in kernel threads. */
 static long long user_ticks;    /* # of timer ticks in user programs. */
+/* Estimate avg # of threads ready to run over the past minute. */
+static fixed_p load_avg;
 
 /* Scheduling. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
@@ -82,6 +85,101 @@ bool list_less_priority(const struct list_elem* a, const struct list_elem* b, vo
   return (t1->priority > t2->priority);
 }
 
+/* Helper function updates priority for a single thread (mlfqs) */
+
+static void mlfqs_update_priority(struct thread* t){
+
+  int priority = convert_fp_zero(divide_int(t->recent_cpu, 4));
+  priority = PRI_MAX - priority - (t->nice * 2);
+
+   // make sure priority is in range
+  if(priority > PRI_MAX){
+    t->priority = PRI_MAX;
+  }
+  else if(priority < PRI_MIN){
+    t->priority = PRI_MIN;
+  }
+  else{
+    t->priority = priority;
+  }
+}
+
+/* Function updates priority for all threads (mlfqs) */
+
+static void recalculate_priority_all(void){
+  struct list_elem* finger = list_begin(&all_list);
+
+  while(finger != list_tail(&all_list)){ // iterate through every thread
+
+    struct thread* t = list_entry(finger, struct thread, allelem);
+
+    if(t != idle_thread)
+      mlfqs_update_priority(t);
+
+    finger = list_next(finger);
+  }
+}
+
+/* Helper function updates recent_cpu for a single thread (mlfqs) */
+
+static void mlfqs_update_rcpu(struct thread* t){
+  int cur_nice = t->nice;
+  fixed_p cur_rcpu = t->recent_cpu;
+
+  fixed_p first = multiply_int(load_avg, 2);
+  fixed_p rcpu = add_int(first, 1);
+
+  rcpu = divide(first, rcpu);
+  rcpu = multiply(rcpu, cur_rcpu);
+  rcpu = add_int(rcpu, cur_nice);
+
+  t->recent_cpu = rcpu;
+}
+
+/* Function updates recent_cpu for every and load_avg for entire system (mlfqs) */
+
+static void recalculate_rcpu_lavg_all(void){
+
+  int ready_threads = (int)list_size(&ready_list); 
+  
+  if(thread_current() != idle_thread) // account for running thread
+    ready_threads++;
+
+  fixed_p fraction1 = divide_int(convert_int(59), 60);
+  fixed_p fraction2 = divide_int(convert_int(1), 60);
+
+  load_avg = multiply(load_avg, fraction1);
+  load_avg = add(load_avg, multiply_int(fraction2, ready_threads));
+
+  struct list_elem* finger = list_begin(&all_list);
+
+  while(finger != list_tail(&all_list)){ // iterate through every thread
+
+    struct thread* t = list_entry(finger, struct thread, allelem);
+
+    if(t != idle_thread)
+      mlfqs_update_rcpu(t);
+
+    finger = list_next(finger);
+  }
+}
+
+/* Helper function checks if yield is currently needed */
+
+static const bool yield_check(void){
+
+  ASSERT(!list_empty(&ready_list));
+
+  struct list_elem* front = list_front(&ready_list);
+
+  struct thread* t = list_entry(front, struct thread, elem);
+
+  if(thread_current()->priority < t->priority){
+    return true;
+  }
+  return false;
+}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -103,6 +201,8 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+
+  load_avg = 0;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -139,11 +239,26 @@ thread_tick (void)
   if (t == idle_thread)
     idle_ticks++;
 #ifdef USERPROG
-  else if (t->pagedir != NULL)
+  else if (t->pagedir != NULL){
     user_ticks++;
+    if(thread_mlfqs)
+      t->recent_cpu = add_int(t->recent_cpu, 1);
+  }
 #endif
-  else
+  else{
     kernel_ticks++;
+    if(thread_mlfqs)
+      t->recent_cpu = add_int(t->recent_cpu, 1);
+  }
+  if(timer_ticks() % TIMER_FREQ == 0){ // every second
+    recalculate_rcpu_lavg_all();
+  }
+  if(timer_ticks() % 4 == 0){ // every 4 ticks
+    recalculate_priority_all();
+
+    if(!list_empty(&ready_list) && yield_check()) // may have to yield
+      intr_yield_on_return();
+  }
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -192,6 +307,12 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+  if (thread_mlfqs){ // inherit from parents
+    t->nice = thread_current()->nice;
+    t->recent_cpu = thread_current()->recent_cpu;
+    mlfqs_update_priority(t);
+  }
+
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -368,18 +489,10 @@ thread_set_priority (int new_priority)
       cur->priority = new_priority;
     }
 
-    if(!list_empty(&ready_list)){ // might have to switch thread
-
-      struct list_elem* front = list_front(&ready_list); // grab elem with highest priority
-
-      struct thread* t = list_entry(front, struct thread, elem); // get elem thread info
-
-      if(cur->priority < t->priority){ // prioritize thread with higher priority
-        thread_yield();
-      }
-    }
+    if(!list_empty(&ready_list) && yield_check()) // may have to yield
+      thread_yield();
   }
-  else{ // cannot change priority
+  else{ // cannot change priority (mlfqs)
     return;
   }
 }
@@ -393,33 +506,36 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  thread_current()->nice = nice;
+
+  mlfqs_update_priority(thread_current()); // uses new nice
+
+  if(!list_empty(&ready_list) && yield_check())
+    thread_yield();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return 100 * convert_fp_nearest(load_avg);
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  fixed_p recent = thread_current()->recent_cpu;
+  return 100 * convert_fp_nearest(recent);
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -507,14 +623,19 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  if(!thread_mlfqs){
+  if(!thread_mlfqs){ // use priority donation
     t->priority = priority;
     t->original_priority = priority; // permanently store undonated priority
+    t->nice = -1; // unused
+    t->recent_cpu = -1; // unused
   }
-  else{ // can ignore priority parameter
-    t->priority = 0;
-    t->original_priority = 0;
+  else{ // mlfqs
+    t->priority = PRI_MAX;
+    t->original_priority = -1; // unused
+    t->recent_cpu = 0; // inherit from parent
+    t->nice = 0;
   }
+
   t->waiting_for = NULL; // initialize default lock
   t->magic = THREAD_MAGIC;
 

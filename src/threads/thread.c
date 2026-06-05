@@ -89,6 +89,8 @@ bool list_less_priority(const struct list_elem* a, const struct list_elem* b, vo
 
 static void mlfqs_update_priority(struct thread* t){
 
+  ASSERT(thread_mlfqs);
+
   int priority = convert_fp_zero(divide_int(t->recent_cpu, 4));
   priority = PRI_MAX - priority - (t->nice * 2);
 
@@ -241,23 +243,36 @@ thread_tick (void)
 #ifdef USERPROG
   else if (t->pagedir != NULL){
     user_ticks++;
-    if(thread_mlfqs)
+    if(thread_mlfqs){
       t->recent_cpu = add_int(t->recent_cpu, 1);
+
+      if (timer_ticks() % TIMER_FREQ == 0) // every second
+        recalculate_rcpu_lavg_all();
+
+      if (timer_ticks() % 4 == 0){ // every 4 ticks
+          recalculate_priority_all();
+
+          if (!list_empty(&ready_list) && yield_check()) // may have to yield
+            intr_yield_on_return();
+      }
+    }
   }
 #endif
   else{
     kernel_ticks++;
-    if(thread_mlfqs)
+    if (thread_mlfqs){
       t->recent_cpu = add_int(t->recent_cpu, 1);
-  }
-  if(timer_ticks() % TIMER_FREQ == 0){ // every second
-    recalculate_rcpu_lavg_all();
-  }
-  if(timer_ticks() % 4 == 0){ // every 4 ticks
-    recalculate_priority_all();
 
-    if(!list_empty(&ready_list) && yield_check()) // may have to yield
-      intr_yield_on_return();
+      if (timer_ticks() % TIMER_FREQ == 0)
+        recalculate_rcpu_lavg_all();
+
+      if (timer_ticks() % 4 == 0){
+          recalculate_priority_all();
+
+          if (!list_empty(&ready_list) && yield_check())
+            intr_yield_on_return();
+      }
+    }
   }
 
   /* Enforce preemption. */

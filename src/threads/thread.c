@@ -243,35 +243,24 @@ thread_tick (void)
 #ifdef USERPROG
   else if (t->pagedir != NULL){
     user_ticks++;
-    if(thread_mlfqs){
-      t->recent_cpu = add_int(t->recent_cpu, 1);
-
-      if (timer_ticks() % TIMER_FREQ == 0) // every second
-        recalculate_rcpu_lavg_all();
-
-      if (timer_ticks() % 4 == 0){ // every 4 ticks
-          recalculate_priority_all();
-
-          if (!list_empty(&ready_list) && yield_check()) // may have to yield
-            intr_yield_on_return();
-      }
-    }
   }
 #endif
   else{
     kernel_ticks++;
-    if (thread_mlfqs){
+  }
+
+  if(thread_mlfqs){
+    if (t != idle_thread)
       t->recent_cpu = add_int(t->recent_cpu, 1);
 
-      if (timer_ticks() % TIMER_FREQ == 0)
-        recalculate_rcpu_lavg_all();
+    if (timer_ticks() % TIMER_FREQ == 0) // every second
+      recalculate_rcpu_lavg_all();
 
-      if (timer_ticks() % 4 == 0){
-          recalculate_priority_all();
+    if (timer_ticks() % 4 == 0){ // every 4 ticks
+      recalculate_priority_all();
 
-          if (!list_empty(&ready_list) && yield_check())
-            intr_yield_on_return();
-      }
+      if (!list_empty(&ready_list) && yield_check()) // may have to yield
+        intr_yield_on_return();
     }
   }
 
@@ -542,15 +531,14 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return 100 * convert_fp_nearest(load_avg);
+  return convert_fp_nearest(multiply_int(load_avg, 100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  fixed_p recent = thread_current()->recent_cpu;
-  return 100 * convert_fp_nearest(recent);
+  return convert_fp_nearest(multiply_int(thread_current()->recent_cpu, 100));
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.

@@ -359,7 +359,11 @@ thread_set_priority (int new_priority)
 {
   struct thread* cur = thread_current();
 
-  if (cur->priority == cur->original_priority){ // can be changed
+  bool not_donated = (cur->priority == cur->original_priority);
+
+  cur->original_priority = new_priority;
+
+  if (not_donated){ // can be changed
     cur->priority = new_priority;
   }
 
@@ -369,7 +373,7 @@ thread_set_priority (int new_priority)
 
     struct thread* t = list_entry(front, struct thread, elem); // get elem thread info
 
-    if(new_priority < t->priority){ // prioritize thread with higher priority
+    if(cur->priority < t->priority){ // prioritize thread with higher priority
       thread_yield();
     }
   }
